@@ -1,408 +1,221 @@
-# 🏗️ Architecture Technique — Clipping Pro Pipeline
+# 🏛️ Architecture — ViralClip
 
-> **Version** : 2.0 — Février 2026
-> **Auteur** : Projet Antigravity
-> **Stack** : Python 3.11 · Docker · FFmpeg · MediaPipe · 3 APIs IA
+> Detailed technical architecture of the ViralClip platform.
 
 ---
 
-## 1. Vue d'ensemble
+## System Overview
 
-Le système est un **pipeline séquentiel en 6 étapes** qui transforme un lien YouTube en clips vidéo verticaux prêts à publier sur TikTok, Instagram Reels et Facebook, avec sous-titres dynamiques, face tracking, color grading et descriptions SEO générées par IA.
+ViralClip is built as a **distributed, event-driven microservices architecture** designed for horizontal scalability.
+
+```mermaid
+graph TB
+    subgraph Client Layer
+        A["🌐 Next.js Frontend<br/>localhost:3001"]
+        B["📱 CLI<br/>main.py"]
+    end
+
+    subgraph API Layer
+        C["⚡ FastAPI Gateway<br/>localhost:8080"]
+    end
+
+    subgraph Processing Layer
+        D["🔄 Celery Worker"]
+        E["📦 Redis<br/>Message Broker"]
+    end
+
+    subgraph Storage Layer
+        F["🗄️ PostgreSQL<br/>User & Job Data"]
+        G["📁 File System<br/>Videos & Clips"]
+    end
+
+    A -->|REST API| C
+    B -->|Direct Call| D
+    C -->|Enqueue Task| E
+    E -->|Dequeue| D
+    C -->|Read/Write| F
+    D -->|Read/Write| F
+    D -->|Save Media| G
+```
+
+---
+
+## Processing Pipeline
+
+The core pipeline runs as a **6-stage sequential workflow** inside a Celery worker:
+
+```mermaid
+flowchart LR
+    A["📥 Download<br/><i>yt-dlp</i>"] --> B["📝 Transcribe<br/><i>Whisper</i>"]
+    B --> C["🧠 Analyze<br/><i>Multi-AI</i>"]
+    C --> D["🎨 Effects Plan<br/><i>AI Director</i>"]
+    D --> E["✂️ Clip & Render<br/><i>FFmpeg + MediaPipe</i>"]
+    E --> F["🔍 SEO Generate<br/><i>Multi-AI</i>"]
+
+    style A fill:#1e3a5f,stroke:#4fc3f7,color:#fff
+    style B fill:#1b5e20,stroke:#66bb6a,color:#fff
+    style C fill:#4a148c,stroke:#ce93d8,color:#fff
+    style D fill:#e65100,stroke:#ffb74d,color:#fff
+    style E fill:#b71c1c,stroke:#ef9a9a,color:#fff
+    style F fill:#006064,stroke:#4dd0e1,color:#fff
+```
+
+### Stage Details
+
+| Stage | Module | Input | Output | AI Engine |
+|-------|--------|-------|--------|-----------|
+| 1. Download | `downloader.py` | YouTube URL | `.mp4` + `.mp3` | — |
+| 2. Transcribe | `transcriber.py` | `.mp3` | `transcription.json` | Groq Whisper / Local Whisper |
+| 3. Analyze | `analyzer.py` | `transcription.json` | `viral_moments.json` | Gemini → DeepSeek → Groq → Qwen |
+| 4. Effects | `effects_director.py` | `viral_moments.json` | `effects.json` | Same fallback chain |
+| 5. Clip | `clipper.py` | `.mp4` + all JSONs | Platform clips | — (FFmpeg + MediaPipe) |
+| 6. SEO | `seo_generator.py` | All JSONs | `seo.json` | Same fallback chain |
+
+---
+
+## AI Engine Fallback Strategy
+
+The engine manager implements a **strategy pattern with automatic fallback**:
 
 ```mermaid
 flowchart TD
-    A["🔗 URL YouTube"] --> B["📥 ÉTAPE 1\ndownloader.py"]
-    B --> C["📝 ÉTAPE 2\ntranscriber.py"]
-    C --> D["🧠 ÉTAPE 3\nanalyzer.py"]
-    D --> E["🎨 ÉTAPE 4\neffects_director.py"]
-    E --> F["✂️ ÉTAPE 5\nclipper.py"]
-    F --> G["🔍 ÉTAPE 6\nseo_generator.py"]
-    G --> H["📁 Vidéos + SEO"]
+    A{"API Key Available?"}
+    A -->|GEMINI_API_KEY| B["Gemini 2.0 Flash"]
+    A -->|DEEPSEEK_API_KEY| C["DeepSeek V3"]
+    A -->|GROQ_API_KEY| D["Groq Llama 3.3"]
+    A -->|ALIBABA_API_KEY| E["Alibaba Qwen Plus"]
 
-    subgraph "Modules transversaux"
-        S["subtitle_generator.py"]
-        T["face_tracker.py"]
-        DS["deepseek_client.py"]
+    B -->|"❌ Rate Limit / Error"| C
+    C -->|"❌ Rate Limit / Error"| D
+    D -->|"❌ Rate Limit / Error"| E
+    E -->|"❌ All Failed"| F["🚫 Pipeline Error"]
+
+    B -->|"✅ Success"| G["📄 JSON Response"]
+    C -->|"✅ Success"| G
+    D -->|"✅ Success"| G
+    E -->|"✅ Success"| G
+
+    style B fill:#1a73e8,stroke:#4285f4,color:#fff
+    style C fill:#0d47a1,stroke:#2196f3,color:#fff
+    style D fill:#e65100,stroke:#ff9800,color:#fff
+    style E fill:#6a1b9a,stroke:#ab47bc,color:#fff
+```
+
+### Engine Comparison
+
+| Engine | Speed | Quality | Cost | Best For |
+|--------|:-----:|:-------:|:----:|----------|
+| Gemini 2.0 Flash | ⚡⚡⚡ | ★★★★★ | Free tier | Primary analysis |
+| DeepSeek V3 | ⚡⚡ | ★★★★☆ | $0.14/1M tokens | Complex analysis |
+| Groq Llama 3.3 | ⚡⚡⚡⚡ | ★★★☆☆ | Free tier | Fast iteration |
+| Alibaba Qwen Plus | ⚡⚡ | ★★★★☆ | $0.10/1M tokens | Fallback |
+
+---
+
+## Docker Services Topology
+
+```mermaid
+graph TB
+    subgraph docker-compose.yml
+        FE["🖥️ frontend<br/>node:20-alpine<br/>:3001→3000"]
+        API["⚡ api<br/>Python 3.10<br/>:8080→8000"]
+        WK["⚙️ worker<br/>Python 3.10<br/>Celery"]
+        RD["📦 redis<br/>redis:7-alpine<br/>:6379"]
+        PG["🗄️ postgres<br/>postgres:15-alpine<br/>:5433→5432"]
     end
 
-    F -.-> S
-    F -.-> T
-    D -.-> DS
-    E -.-> DS
-    G -.-> DS
+    FE -->|"depends_on"| API
+    API -->|"depends_on"| RD
+    API -->|"depends_on"| PG
+    WK -->|"depends_on"| RD
+    WK -->|"depends_on"| PG
+
+    FE -.->|"NEXT_PUBLIC_API_URL"| API
+    API -.->|"REDIS_URL"| RD
+    API -.->|"DATABASE_URL"| PG
+    WK -.->|"REDIS_URL"| RD
+
+    style FE fill:#000,stroke:#fff,color:#fff
+    style API fill:#009688,stroke:#4db6ac,color:#fff
+    style WK fill:#37814a,stroke:#66bb6a,color:#fff
+    style RD fill:#d32f2f,stroke:#ef5350,color:#fff
+    style PG fill:#1565c0,stroke:#42a5f5,color:#fff
 ```
 
 ---
 
-## 2. Arborescence des fichiers
-
-```
-08_clipping/
-├── main.py                  # Orchestrateur principal (6 étapes)
-├── downloader.py            # Téléchargement YouTube + extraction audio
-├── transcriber.py           # Transcription (Groq Whisper → Whisper local)
-├── analyzer.py              # Détection des moments viraux (IA)
-├── effects_director.py      # Sélection d'effets par plateforme (IA)
-├── clipper.py               # Montage FFmpeg multi-plateforme
-├── seo_generator.py         # Descriptions et hashtags (IA)
-├── subtitle_generator.py    # Génération de fichiers ASS
-├── face_tracker.py          # Détection de visages (MediaPipe)
-├── deepseek_client.py       # Client API DeepSeek partagé
-├── Dockerfile               # Image Python 3.11 + FFmpeg
-├── docker-compose.yml       # Orchestration Docker
-├── requirements.txt         # Dépendances Python
-├── .env                     # Clés API (non versionné)
-└── downloads/               # Dossier de sortie (généré)
-    ├── {id}.mp4             # Vidéo source
-    ├── {id}.mp3             # Audio extrait
-    ├── {id}_transcription.json
-    ├── {id}_viral_moments.json
-    ├── {id}_effects.json
-    ├── {id}_seo.json
-    └── {id}_clips/
-        ├── tiktok/          # 1080×1920, filtre Néon/Warm
-        ├── reels/           # 1080×1920, filtre Teal&Orange/Golden
-        └── facebook/        # 1080×1350, filtre Cinematic/Cool
-```
-
----
-
-## 3. Détail de chaque module
-
-### 3.1 `main.py` — Orchestrateur (142 lignes)
-
-| Fonction | Rôle |
-|---|---|
-| `main()` | Point d'entrée. Charge `.env`, valide les clés API, exécute les 6 étapes séquentiellement. |
-| `_sanitize_video_id()` | Extrait l'identifiant YouTube du chemin fichier. |
-| `_print_seo_summary()` | Affiche un résumé des descriptions SEO en console. |
-
-**Flux de contrôle** : Chaque étape reçoit le résultat de la précédente. Si une étape critique échoue (download, transcription, analyse), le pipeline s'arrête immédiatement.
-
----
-
-### 3.2 `downloader.py` — Acquisition (100 lignes)
-
-| Fonction | Entrée | Sortie |
-|---|---|---|
-| `get_video_metadata(url)` | URL YouTube | `dict` (titre, tags, vues, durée…) |
-| `download_video(url)` | URL YouTube | Chemin `downloads/{id}.mp4` |
-| `extract_audio(video_path)` | Chemin `.mp4` | Chemin `downloads/{id}.mp3` |
-
-**Dépendances** : `yt-dlp` (téléchargement), `ffmpeg` (extraction audio mono 48kbps).
-
-**Optimisation audio** : L'audio est compressé en mono 48kbps pour rester sous la limite de 25 Mo de Groq Whisper.
-
----
-
-### 3.3 `transcriber.py` — Transcription (128 lignes)
-
-```mermaid
-flowchart LR
-    A["Audio .mp3"] --> B{"Groq API\ndisponible ?"}
-    B -->|Oui| C["Groq Whisper\n~10s, cloud"]
-    B -->|Non| D["Whisper Local\n~15min, CPU"]
-    C -->|200 OK| E["transcription.json"]
-    C -->|413/Erreur| D
-    D --> E
-```
-
-| Fonction | Modèle IA | Latence |
-|---|---|---|
-| `_transcribe_groq()` | `whisper-large-v3` | ~10 secondes |
-| `_transcribe_local()` | `whisper-base` | ~15 minutes (CPU) |
-
-**Format de sortie** (`_transcription.json`) :
-```json
-{
-  "language": "fr",
-  "text": "Texte complet...",
-  "segments": [
-    {"id": 0, "start": 0.0, "end": 3.5, "text": "Bonjour à tous"}
-  ]
-}
-```
-
----
-
-### 3.4 `analyzer.py` — Détection virale (228 lignes)
-
-```mermaid
-flowchart LR
-    A["transcription.json"] --> B{"Gemini\n2.0 Flash"}
-    B -->|429| C{"DeepSeek\nV3 671B"}
-    C -->|Erreur| D{"Groq\nLlama 3.3 70B"}
-    B -->|200| E["viral_moments.json"]
-    C -->|200| E
-    D -->|200| E
-```
-
-| Fonction | Rôle |
-|---|---|
-| `analyze_transcription()` | Orchestrateur avec fallback Gemini → DeepSeek → Groq |
-| `_build_prompt()` | Construit le prompt IA (segments tronqués intelligemment) |
-| `_analyze_gemini()` | Appel REST Gemini 2.0 Flash |
-| `_analyze_groq()` | Appel REST Groq Llama 3.3 70B |
-| `_parse_ai_response()` | Nettoyage JSON (suppression markdown) |
-| `_save_result()` | Écriture du fichier de sortie |
-
-**Contraintes du prompt** :
-- **Minimum 3 clips** chronologiques
-- **Durée ≥ 30 secondes** par clip
-- **Nomenclature obligatoire** : `"Part 1 - [Titre]"`, `"Part 2 - [Titre]"`…
-- Les bornes `start`/`end` doivent correspondre à des limites de segments
-
-**Format de sortie** (`_viral_moments.json`) :
-```json
-{
-  "clips": [
-    {
-      "clip_index": 1,
-      "title": "Part 1 - Le début de l'histoire",
-      "start": 12.5, "end": 45.2,
-      "viral_score": 9,
-      "suggested_caption": "Accroche..."
-    }
-  ]
-}
-```
-
----
-
-### 3.5 `effects_director.py` — Direction artistique IA (364 lignes)
-
-**Catalogues intégrés :**
-
-| Type | Clé | Description |
-|---|---|---|
-| 🎨 Couleur | `vibrant_warm` | Saturation 1.4, tons chauds |
-| 🎨 Couleur | `vibrant_cool` | Tons froids bleutés |
-| 🎨 Couleur | `vibrant_golden` | Heure dorée |
-| 🎨 Couleur | `vibrant_teal_orange` | Cinématique Teal & Orange |
-| 🎨 Couleur | `vibrant_neon` | Saturé, contrasté, nuit |
-| 🎨 Couleur | `vibrant_cinematic` | Sombre, posé, cinéma |
-| 🔊 Audio | `bass_boost` | Low-shelf boost 6dB |
-| 🔊 Audio | `audio_normalize` | Loudnorm -14 LUFS |
-| 🎥 Visuel | `zoom_pulse` | Zoom lent pulsé |
-| 🎥 Visuel | `sharp` | Netteté accrue |
-
-**Presets par défaut (si l'IA échoue)** :
-
-| Plateforme | Effets | Couleur | Transition |
-|---|---|---|---|
-| TikTok | bass_boost, sharp | vibrant_neon | none |
-| Reels | audio_normalize | vibrant_teal_orange | none |
-| Facebook | audio_normalize | vibrant_cinematic | fade |
-
-| Fonction | Rôle |
-|---|---|
-| `generate_effects_plan()` | Orchestrateur IA (Gemini → DeepSeek → Groq → Presets) |
-| `get_color_filter_vf()` | Traduit un filtre couleur en expression FFmpeg `-vf` |
-| `get_ffmpeg_filters()` | Traduit les effets en filtres FFmpeg `-vf` et `-af` |
-| `get_output_dimensions()` | Retourne `(width, height)` par plateforme |
-| `_build_effects_prompt()` | Prompt IA pour le choix des effets |
-| `_generate_default_plan()` | Plan de secours sans IA |
-| `_validate_and_enrich()` | Vérifie et complète le plan IA |
-
----
-
-### 3.6 `clipper.py` — Montage FFmpeg (221 lignes)
-
-```mermaid
-flowchart TD
-    A["viral_moments.json\n+ effects.json"] --> B["Pour chaque clip"]
-    B --> C["Face Tracking\n(MediaPipe)"]
-    C --> D["Pour chaque plateforme\n(tiktok, reels, facebook)"]
-    D --> E["Construction filtres FFmpeg"]
-    E --> F["1. Crop (face tracking)"]
-    F --> G["2. Color grading"]
-    G --> H["3. Transition fade"]
-    H --> I["4. Sous-titres ASS\n(+ Part X en haut)"]
-    I --> J["5. Audio effects"]
-    J --> K["FFmpeg -filter_script"]
-    K --> L[".mp4 final"]
-```
-
-| Fonction | Rôle |
-|---|---|
-| `process_clips()` | Boucle principale : pour chaque clip × plateforme |
-| `_render_clip()` | Construit la chaîne de filtres FFmpeg et encode |
-| `_build_crop_filter()` | Génère le crop dynamique basé sur les coordonnées du visage |
-| `_safe_filename()` | Nettoie les titres pour les noms de fichiers |
-
-**Chaîne de filtres vidéo FFmpeg (dans l'ordre)** :
-1. `crop` — Recadrage vertical centré sur le visage (ou centré par défaut)
-2. `eq`+`colorbalance` — Color grading vibrant (différent par plateforme)
-3. `fade` — Transition d'entrée/sortie (optionnel, Facebook)
-4. `ass` — Sous-titres dynamiques + titre "PART X" permanent en haut
-
-**Nommage des fichiers de sortie** :
-```
-{clip_index}_{Part_X_-_Titre_nettoyé}.mp4
-```
-
----
-
-### 3.7 `subtitle_generator.py` — Sous-titres (105 lignes)
-
-Génère des fichiers **ASS (Advanced SubStation Alpha)** avec 2 styles :
-
-| Style | Position | Couleur | Usage |
-|---|---|---|---|
-| `Default` | Bas (Alignment 2, MarginV 450) | Jaune `&H0000FFFF` | Paroles découpées 3 mots |
-| `Title` | Haut (Alignment 8, MarginV 150) | Blanc `&H00FFFFFF` | "PART 1", "PART 2"… |
-
-| Fonction | Rôle |
-|---|---|
-| `generate_ass_for_clip()` | Génère le fichier ASS complet pour un clip |
-| `split_text_into_chunks()` | Découpe le texte en blocs de 3 mots max |
-| `format_time_ass()` | Convertit secondes → `H:MM:SS.cs` |
-
-**Logique de découpage** : Chaque segment de transcription est découpé en sous-blocs de 3 mots, affichés séquentiellement. Le texte est en majuscules pour maximiser la lisibilité.
-
----
-
-### 3.8 `face_tracker.py` — Suivi de visage (143 lignes)
-
-| Classe/Fonction | Rôle |
-|---|---|
-| `FaceTracker.__init__()` | Initialise MediaPipe Face Detection |
-| `FaceTracker.get_tracking_data()` | Analyse la vidéo et retourne les coordonnées X lissées |
-| `FaceTracker._smooth_coordinates()` | Moyenne mobile (window=15) anti-saccades |
-
-**Pipeline de tracking** :
-1. FFmpeg extrait les frames brutes (640px de large) via pipe
-2. MediaPipe détecte le visage principal (1 frame / 5)
-3. Les coordonnées X du centre du visage sont lissées (moyenne mobile window=15)
-4. Décimation à 1 point / 0.8 seconde pour limiter la taille de l'expression FFmpeg
-
----
-
-### 3.9 `deepseek_client.py` — Client API partagé (75 lignes)
-
-| Fonction | Rôle |
-|---|---|
-| `call_deepseek()` | Appel brut → texte |
-| `call_deepseek_json()` | Appel + parsing JSON automatique |
-
-**Endpoint** : `https://api.deepseek.com/chat/completions` (compatible OpenAI)
-**Modèle** : `deepseek-chat` (DeepSeek-V3, 671B paramètres)
-**Timeout** : 120 secondes
-
----
-
-## 4. Système de fallback IA
-
-Toutes les étapes IA utilisent la même chaîne de priorité :
-
-```mermaid
-flowchart LR
-    A["🥇 Gemini 2.0 Flash\n(Google, gratuit)"] -->|429/Erreur| B["🥈 DeepSeek V3\n(671B, payant)"]
-    B -->|Erreur| C["🥉 Groq Llama 3.3\n(70B, gratuit)"]
-    C -->|Erreur| D["❌ Échec\nou Presets par défaut"]
-```
-
-| Module | Gemini | DeepSeek | Groq | Dernier recours |
-|---|---|---|---|---|
-| `analyzer.py` | ✅ Priorité | ✅ Fallback 1 | ✅ Fallback 2 | Pipeline s'arrête |
-| `effects_director.py` | ✅ Priorité | ✅ Fallback 1 | ✅ Fallback 2 | Presets par défaut |
-| `seo_generator.py` | ✅ Priorité | ✅ Fallback 1 | ✅ Fallback 2 | Pas de SEO |
-| `transcriber.py` | — | — | ✅ Whisper cloud | Whisper local (CPU) |
-
----
-
-## 5. Infrastructure Docker
-
-```mermaid
-graph TD
-    subgraph "Docker Container (clipping_python_env)"
-        A["Python 3.11-slim"]
-        B["FFmpeg (apt)"]
-        C["MediaPipe + NumPy"]
-        D["OpenAI Whisper"]
-        E["yt-dlp"]
-        F["requests + dotenv"]
-    end
-
-    G[".env\n(GEMINI / DEEPSEEK / GROQ)"] --> A
-    H["Volume : .:/app"] --> A
-    A --> I["downloads/"]
-```
-
-| Composant | Version | Rôle |
-|---|---|---|
-| Base image | `python:3.11-slim` | Runtime Python léger |
-| FFmpeg | apt package | Encodage vidéo/audio |
-| yt-dlp | latest | Téléchargement YouTube |
-| MediaPipe | ≥ 0.10.13 | Détection de visages |
-| OpenAI Whisper | latest | Transcription locale (fallback) |
-| requests | 2.31.0 | Appels HTTP aux APIs IA |
-| python-dotenv | 1.0.1 | Chargement des variables d'environnement |
-
----
-
-## 6. Flux de données complet
+## Data Flow
 
 ```mermaid
 sequenceDiagram
-    participant U as Utilisateur
-    participant M as main.py
-    participant DL as downloader.py
-    participant TR as transcriber.py
-    participant AN as analyzer.py
-    participant EF as effects_director.py
-    participant CL as clipper.py
-    participant SEO as seo_generator.py
+    participant U as 👤 User
+    participant F as 🌐 Frontend
+    participant A as ⚡ API
+    participant R as 📦 Redis
+    participant W as ⚙️ Worker
+    participant FS as 📁 FileSystem
 
-    U->>M: python main.py "URL"
-    M->>DL: get_video_metadata(url)
-    DL-->>M: {title, tags, views...}
-    M->>DL: download_video(url)
-    DL-->>M: downloads/ID.mp4
-    M->>DL: extract_audio(video)
-    DL-->>M: downloads/ID.mp3
-    M->>TR: transcribe_audio(mp3)
-    TR-->>M: ID_transcription.json
-    M->>AN: analyze_transcription(json)
-    AN-->>M: ID_viral_moments.json (3+ clips)
-    M->>EF: generate_effects_plan(viral, transcription)
-    EF-->>M: ID_effects.json
-    M->>CL: process_clips(video, viral, effects)
-    Note over CL: 3 clips × 3 plateformes = 9 vidéos
-    CL-->>M: tiktok/ reels/ facebook/
-    M->>SEO: generate_seo(url, metadata, viral)
-    SEO-->>M: ID_seo.json
-    M-->>U: Pipeline terminé ✅
+    U->>F: Paste YouTube URL
+    F->>A: POST /api/v1/clip
+    A->>R: Enqueue task
+    A-->>F: { task_id: "abc123" }
+
+    F->>A: GET /api/v1/tasks/abc123
+    Note over F,A: Poll every 3s
+
+    R->>W: Dequeue task
+    W->>FS: Download video (yt-dlp)
+    W->>W: Transcribe (Whisper)
+    W->>W: Analyze (AI Engine)
+    W->>W: Effects Planning
+    W->>FS: Clip & Render (FFmpeg)
+    W->>W: Generate SEO
+    W->>R: Task SUCCESS + result
+
+    A-->>F: { status: "SUCCESS", result: {...} }
+    F-->>U: ✅ Clips ready!
 ```
 
 ---
 
-## 7. Variables d'environnement
+## Face Tracking Pipeline
 
-| Variable | Obligatoire | Usage |
-|---|---|---|
-| `GEMINI_API_KEY` | Recommandé | Moteur IA prioritaire (analyse, effets, SEO) |
-| `DEEPSEEK_API_KEY` | Optionnel | Fallback 1 si Gemini échoue |
-| `GROQ_API_KEY` | Recommandé | Transcription Whisper cloud + fallback 2 IA |
-| `TELEGRAM_BOT_TOKEN` | Non utilisé | Réservé pour future intégration bot |
+```mermaid
+flowchart LR
+    A["🎥 Video Frame"] --> B["👤 MediaPipe<br/>Face Detection"]
+    B --> C{"Face Found?"}
+    C -->|Yes| D["📐 Calculate<br/>Bounding Box"]
+    C -->|No| E["🎯 Use Previous<br/>or Center Crop"]
+    D --> F["✂️ 9:16 Vertical<br/>Crop Window"]
+    E --> F
+    F --> G["🎬 FFmpeg<br/>Crop & Render"]
 
-**Règle** : Au moins 1 clé parmi `GEMINI` / `DEEPSEEK` / `GROQ` est requise.
+    style B fill:#4caf50,stroke:#81c784,color:#fff
+    style F fill:#ff9800,stroke:#ffb74d,color:#fff
+```
 
 ---
 
-## 8. Commandes d'exploitation
+## Tech Stack Summary
 
-```bash
-# Construire et démarrer l'environnement
-docker compose up -d --build
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **Frontend** | Next.js 15, Tailwind CSS, shadcn/ui | Dashboard & Landing Page |
+| **API** | FastAPI, Pydantic, Uvicorn | REST Gateway |
+| **Queue** | Celery 5.4, Redis 7 | Async Task Processing |
+| **Database** | PostgreSQL 15, SQLAlchemy, Alembic | Persistence |
+| **AI** | Gemini, DeepSeek, Groq, Qwen | Analysis & Generation |
+| **Video** | FFmpeg, yt-dlp | Download, Clip, Render |
+| **ML** | MediaPipe, OpenAI Whisper | Face Tracking, Transcription |
+| **Quality** | mypy, flake8, pytest | Type Safety & Testing |
+| **Deploy** | Docker Compose | Orchestration |
 
-# Lancer le pipeline sur une vidéo
-docker compose exec clipping-env python main.py "URL_YOUTUBE"
+---
 
-# Voir les logs en temps réel
-docker compose logs -f clipping-env
+## Security Considerations
 
-# Arrêter l'environnement
-docker compose down
-```
+- API keys stored in `.env` (never committed — protected by `.gitignore`)
+- CORS restricted to `localhost:3000` and `localhost:3001`
+- Pydantic validation on all API inputs
+- No direct database exposure (only via API)
+- Docker network isolation between services

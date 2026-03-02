@@ -54,3 +54,7 @@ frontend/out/
 *.bak
 *.tmp
 reference_repo/
+.ipynb_checkpoints/
+*.ipynb
+test_output.log
+task.md
