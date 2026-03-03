@@ -96,6 +96,7 @@ class ClipRequest(BaseModel):
     url: str
     preferred_engine: Optional[str] = "auto"
     num_clips: Optional[int] = None
+    platforms: Optional[dict[str, int]] = None
 
 
 class JobResponse(BaseModel):
@@ -165,10 +166,12 @@ async def start_clipping_task(
     await db.flush()
 
     # Enqueue Celery task
+    platforms_dict = request.platforms or {}
     task = process_video_task.delay(
         request.url,
         request.preferred_engine,
         request.num_clips,
+        platforms_dict
     )
 
     # Store Celery task ID
@@ -298,7 +301,12 @@ async def stream_task_progress(task_id: str):
                 progress = meta.get("progress", 0)
                 step = meta.get("step", "Processing...")
                 logs = meta.get("logs", [])
-                yield f"data: {json.dumps({'progress': progress, 'step': step, 'status': 'STARTED', 'logs': logs})}\n\n"
+                
+                payload = {'progress': progress, 'step': step, 'status': 'STARTED', 'logs': logs}
+                if "eta_seconds" in meta:
+                    payload['eta_seconds'] = meta["eta_seconds"]
+                    
+                yield f"data: {json.dumps(payload)}\n\n"
             else:
                 yield f"data: {json.dumps({'progress': 0, 'step': '⏳ Waiting in queue...', 'status': 'PENDING'})}\n\n"
 

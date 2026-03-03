@@ -53,6 +53,7 @@ export type ProgressEvent = {
     progress: number;
     step: string;
     status: string;
+    eta_seconds?: number;
     logs?: string[];
     result?: Record<string, unknown>;
     error?: string;
@@ -166,6 +167,7 @@ export async function submitClipJob(data: {
     url: string;
     preferred_engine?: string;
     num_clips?: number;
+    platforms?: Record<string, number>;
 }): Promise<{ job_id: number; task_id: string; credits_remaining: number }> {
     const res = await fetch(`${API_BASE_URL}/api/v1/clip`, {
         method: "POST",

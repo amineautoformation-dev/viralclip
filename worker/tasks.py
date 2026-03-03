@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import time
 
 # Ajouter le répertoire parent pour les imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,6 +48,8 @@ class ProgressTracker:
     def __init__(self, task):
         self.task = task
         self.logs = []
+        self.start_time = time.time()
+
     
     def log(self, message: str):
         """Add a log line."""
@@ -54,12 +57,18 @@ class ProgressTracker:
     
     def set_progress(self, progress: float, step: str):
         """Set exact progress value and push to Celery state."""
+        elapsed = time.time() - self.start_time
+        eta_seconds = 0
+        if 0 < progress < 100:
+            eta_seconds = max(0, int((elapsed / (progress / 100.0)) - elapsed))
+
         self.task.update_state(
             state='STARTED',
             meta={
                 'progress': progress,
                 'step': step,
                 'logs': self.logs[-20:],  # Last 20 lines
+                'eta_seconds': eta_seconds,
             }
         )
 
@@ -67,10 +76,10 @@ class ProgressTracker:
 # ── Main Celery Task ──────────────────────────────────────
 
 @celery_app.task(bind=True, name="video.process")
-def process_video_task(self, url: str, preferred_engine: str = "auto", num_clips: int | None = None):
+def process_video_task(self, url: str, preferred_engine: str = "auto", num_clips: int | None = None, platforms: dict | None = None):
     """
     Task Celery qui emballe le pipeline complet d'AutoClip-AI.
-    Publie le progrès via Celery state → Redis → SSE.
+    Publie le progrès via Celery state (incluant ETA) → Redis → SSE.
     Met à jour le Job dans la base de données.
     """
     task_id = self.request.id
@@ -86,10 +95,12 @@ def process_video_task(self, url: str, preferred_engine: str = "auto", num_clips
         tracker.set_progress(5, "📥 Downloading video...")
         tracker.log(f"🔗 Starting pipeline for: {url}")
         tracker.log(f"🤖 Engine: {preferred_engine}")
+        if platforms:
+            tracker.log(f"🎯 Target platforms: {platforms}")
         if num_clips:
             tracker.log(f"✂️ Requested clips: {num_clips}")
         
-        result = run_pipeline(url=url, preferred_engine=preferred_engine, num_clips=num_clips)
+        result = run_pipeline(url=url, preferred_engine=preferred_engine, num_clips=num_clips, platforms=platforms)
         
         # Mark as complete
         tracker.set_progress(100, "✅ Completed!")

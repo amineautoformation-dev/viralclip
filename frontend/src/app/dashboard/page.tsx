@@ -46,7 +46,12 @@ export default function DashboardPage() {
     // Form state
     const [url, setUrl] = useState("");
     const [engine, setEngine] = useState("auto");
-    const [numClips, setNumClips] = useState("");
+    const [platforms, setPlatforms] = useState<Record<string, number>>({
+        tiktok: 2,
+        reels: 1,
+        shorts: 0,
+        facebook: 0
+    });
 
     // Jobs
     const [jobs, setJobs] = useState<JobResponse[]>([]);
@@ -90,10 +95,11 @@ export default function DashboardPage() {
 
         setLoading(true);
         try {
+            const hasPlatforms = Object.values(platforms).some(v => v > 0);
             const result = await submitClipJob({
                 url,
                 preferred_engine: engine,
-                num_clips: numClips ? parseInt(numClips) : undefined,
+                platforms: hasPlatforms ? platforms : undefined,
             });
 
             toast.success(`Job submitted! ${result.credits_remaining} credits remaining.`);
@@ -235,40 +241,64 @@ export default function DashboardPage() {
                                         </div>
                                     </div>
 
-                                    {/* Engine + Clips */}
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div className="space-y-2">
-                                            <label className="text-sm font-medium">AI Engine</label>
-                                            <Select value={engine} onValueChange={setEngine}>
-                                                <SelectTrigger className="h-11">
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="auto">Auto (Best Available)</SelectItem>
-                                                    <SelectItem value="gemini">Gemini 2.0 Flash</SelectItem>
-                                                    <SelectItem value="deepseek">DeepSeek V3</SelectItem>
-                                                    <SelectItem value="groq">Groq Llama 3.3</SelectItem>
-                                                    <SelectItem value="qwen">Alibaba Qwen</SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-sm font-medium">Number of Clips</label>
-                                            <Input
-                                                placeholder="Auto (3-7)"
-                                                type="number"
-                                                min={1}
-                                                max={15}
-                                                value={numClips}
-                                                onChange={(e) => setNumClips(e.target.value)}
-                                                className="h-11"
-                                            />
+                                    {/* Engine */}
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">AI Engine</label>
+                                        <Select value={engine} onValueChange={setEngine}>
+                                            <SelectTrigger className="h-11">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="auto">Auto (Best Available)</SelectItem>
+                                                <SelectItem value="gemini">Gemini 2.0 Flash</SelectItem>
+                                                <SelectItem value="deepseek">DeepSeek V3</SelectItem>
+                                                <SelectItem value="groq">Groq Llama 3.3</SelectItem>
+                                                <SelectItem value="qwen">Alibaba Qwen</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+
+                                    {/* Platforms target */}
+                                    <div className="space-y-3">
+                                        <label className="text-sm font-medium">Target Platforms (number of clips)</label>
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                            {[
+                                                { id: "tiktok", label: "TikTok" },
+                                                { id: "reels", label: "Reels" },
+                                                { id: "shorts", label: "Shorts" },
+                                                { id: "facebook", label: "Facebook" }
+                                            ].map((p) => (
+                                                <div key={p.id} className="flex flex-col items-center gap-2 p-3 border rounded-xl bg-muted/10">
+                                                    <span className="text-xs font-semibold text-muted-foreground">{p.label}</span>
+                                                    <div className="flex items-center justify-between gap-3 bg-background border rounded-lg p-1 w-full">
+                                                        <Button
+                                                            type="button"
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-6 w-6 rounded text-muted-foreground hover:text-foreground"
+                                                            onClick={() => setPlatforms(prev => ({ ...prev, [p.id]: Math.max(0, prev[p.id] - 1) }))}
+                                                        >
+                                                            -
+                                                        </Button>
+                                                        <span className="text-sm font-bold min-w-[1.2rem] text-center">{platforms[p.id]}</span>
+                                                        <Button
+                                                            type="button"
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-6 w-6 rounded text-muted-foreground hover:text-foreground"
+                                                            onClick={() => setPlatforms(prev => ({ ...prev, [p.id]: Math.min(10, prev[p.id] + 1) }))}
+                                                        >
+                                                            +
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            ))}
                                         </div>
                                     </div>
 
                                     <Button
                                         type="submit"
-                                        disabled={loading || apiOnline === false || user.credits < 10}
+                                        disabled={loading || apiOnline === false || user.credits < 10 || Object.values(platforms).reduce((a, b) => a + b, 0) === 0}
                                         className="w-full h-12 text-base font-semibold bg-primary text-primary-foreground hover:bg-primary/90"
                                     >
                                         {loading ? (
@@ -326,9 +356,17 @@ export default function DashboardPage() {
                                             <span className="text-sm font-medium">
                                                 {job.progress?.step || "Waiting in queue..."}
                                             </span>
-                                            <span className="text-sm font-bold text-primary">
-                                                {Math.round(job.progress?.progress || 0)}%
-                                            </span>
+                                            <div className="flex items-center gap-3">
+                                                {job.progress?.eta_seconds !== undefined && job.progress.status === "STARTED" && (
+                                                    <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                                        <Clock className="h-3 w-3" />
+                                                        ~ {Math.floor(job.progress.eta_seconds / 60)}m {job.progress.eta_seconds % 60}s
+                                                    </span>
+                                                )}
+                                                <span className="text-sm font-bold text-primary">
+                                                    {Math.round(job.progress?.progress || 0)}%
+                                                </span>
+                                            </div>
                                         </div>
                                         <Progress value={job.progress?.progress || 0} className="h-3" />
 
